@@ -53,9 +53,7 @@ class MockMarketData(MarketDataProvider):
         return list(_SAMPLE)
 
 
-def get_provider(data_source: str) -> MarketDataProvider:
-    """Factory. 'schwab' wires the real adapter once keys/approval are in place."""
-    if data_source == "schwab":
-        from mp_terminal.schwab import SchwabMarketData
-        return SchwabMarketData()
+# Note: the Schwab provider needs an OAuth token obtained at runtime, so it is constructed in
+# streamlit_app.py (which manages the login flow), not here. This factory only covers mock.
+def get_mock_provider() -> MarketDataProvider:
     return MockMarketData()
