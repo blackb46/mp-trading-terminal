@@ -32,16 +32,20 @@ class MarketDataProvider(ABC):
 
 # Sample data covering the $2-20 band, including a couple that pass all 4 pillars.
 _SAMPLE = [
-    Quote(symbol="ABCD", price=3.42, prev_close=3.01, bid=3.41, ask=3.43,
+    Quote(symbol="ABCD", company_name="Alpha Beta Corp", price=3.42, prev_close=3.01,
+          day_open=3.05, vwap=3.30, bid=3.41, ask=3.43,
           volume=18_000_000, avg_volume_30d=3_000_000, float_shares=12_000_000,
           day_low=3.05, day_high=3.55, avg_day_high=3.40, avg_day_low=3.00, avg_5d_low=2.95),
-    Quote(symbol="EFGH", price=4.78, prev_close=4.30, bid=4.77, ask=4.79,
+    Quote(symbol="EFGH", company_name="Everfresh Grocery Holdings", price=4.78, prev_close=4.30,
+          day_open=4.40, vwap=4.65, bid=4.77, ask=4.79,
           volume=9_500_000, avg_volume_30d=1_500_000, float_shares=8_000_000,
           day_low=4.35, day_high=4.90, avg_day_high=4.70, avg_day_low=4.25, avg_5d_low=4.10),
-    Quote(symbol="WXYZ", price=12.10, prev_close=11.95, bid=12.08, ask=12.12,
+    Quote(symbol="WXYZ", company_name="Wexler Industries", price=12.10, prev_close=11.95,
+          day_open=11.98, vwap=12.05, bid=12.08, ask=12.12,
           volume=2_200_000, avg_volume_30d=2_000_000, float_shares=45_000_000,
           day_low=11.90, day_high=12.30, avg_day_high=12.15, avg_day_low=11.80, avg_5d_low=11.50),
-    Quote(symbol="MNOP", price=6.55, prev_close=6.40, bid=6.54, ask=6.56,
+    Quote(symbol="MNOP", company_name="Meridian Optics", price=6.55, prev_close=6.40,
+          day_open=6.42, vwap=6.50, bid=6.54, ask=6.56,
           volume=4_100_000, avg_volume_30d=2_800_000, float_shares=30_000_000,
           day_low=6.30, day_high=6.75, avg_day_high=6.50, avg_day_low=6.20, avg_5d_low=6.05),
 ]
@@ -61,6 +65,20 @@ class MockMarketData(MarketDataProvider):
 
     def all_quotes(self) -> list[Quote]:
         return list(_SAMPLE)
+
+    def daily_bars(self, symbol: str, lookback_days: int = 400) -> list[dict]:
+        """Synthetic but deterministic bars so Stock Detail's indicators/chart work offline."""
+        q = self.snapshot(symbol)
+        base = q.price
+        bars = []
+        for i in range(220):
+            # gentle uptrend with a repeating wiggle, seeded off the price
+            drift = base * (0.85 + 0.0012 * i)
+            wig = base * 0.01 * ((i % 7) - 3)
+            c = drift + wig
+            bars.append({"o": c - base * 0.004, "h": c + base * 0.012,
+                         "l": c - base * 0.012, "c": c, "v": 1_000_000 + (i % 5) * 200_000})
+        return bars
 
 
 # Note: the Schwab provider needs an OAuth token obtained at runtime, so it is constructed in

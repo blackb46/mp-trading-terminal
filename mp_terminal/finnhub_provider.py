@@ -130,6 +130,7 @@ class FinnhubMarketData(MarketDataProvider):
             company_name=self._company_name(symbol),
             price=q.get("c") or 0.0,
             prev_close=q.get("pc"),
+            day_open=q.get("o"),
             volume=self._today_volume(symbol),
             avg_volume_30d=int(avg_vol_10d * 1_000_000) if avg_vol_10d else None,
             float_shares=int(shares_out * 1_000_000) if shares_out else None,

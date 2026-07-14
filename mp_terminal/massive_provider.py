@@ -133,14 +133,38 @@ class MassiveMarketData(MarketDataProvider):
                 company_name=names.get(ticker),
                 price=bar["c"],
                 prev_close=prev_bar.get("c") if prev_bar else None,
+                day_open=bar.get("o"),
+                vwap=bar.get("vw"),
                 # Massive's grouped volume can come back as a float; Quote.volume is int.
                 volume=int(round(raw_volume)) if raw_volume is not None else None,
                 day_low=bar.get("l"),
                 day_high=bar.get("h"),
-                # avg_volume_30d / float_shares not available from this endpoint — RVOL will
-                # be None for Massive-sourced quotes. See docs/MASSIVE_SETUP.md.
+                # avg_volume_30d / float_shares not available from this endpoint — true RVOL
+                # for a Massive quote is computed on demand from daily_bars(). See docs.
             ))
         self._quotes_cache = out
+
+    def daily_bars(self, symbol: str, lookback_days: int = 400) -> list[dict]:
+        """Historical daily OHLCV bars (oldest-first) for one symbol, for indicator math.
+
+        Uses the free Aggregate Bars endpoint. One call per symbol, so this is invoked
+        on demand for a single selected symbol (Stock Detail), not across the whole market.
+        """
+        start = (date.today() - timedelta(days=lookback_days)).isoformat()
+        end = date.today().isoformat()
+        try:
+            r = httpx.get(
+                f"{BASE_URL}/v2/aggs/ticker/{symbol}/range/1/day/{start}/{end}",
+                params={"apiKey": self.api_key, "adjusted": "true", "sort": "asc", "limit": 50000},
+                timeout=30,
+            )
+        except Exception:
+            return []
+        if r.status_code != 200:
+            return []
+        results = r.json().get("results") or []
+        return [{"o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"], "v": b.get("v", 0)}
+                for b in results if "c" in b]
 
     def all_quotes(self) -> list[Quote]:
         self._load()

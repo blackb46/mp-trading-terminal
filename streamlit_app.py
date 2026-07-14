@@ -20,9 +20,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from mp_terminal import scanners, scoring
+from mp_terminal import indicators, scanners, scoring
 from mp_terminal.config import load_settings
-from mp_terminal.models import CategoryScores, ScoredStock
+from mp_terminal.models import ScoredStock
 from mp_terminal.providers import MockMarketData
 
 st.set_page_config(page_title="M&P Trading Terminal", page_icon="📈", layout="wide")
@@ -113,7 +113,7 @@ def build_schwab_provider():
     if "token" not in store:
         with st.sidebar:
             st.link_button("🔗 Connect to Schwab", build_authorize_url(key, redirect),
-                           use_container_width=True)
+                           width="stretch")
             st.caption("Paul logs in on Schwab to authorize — credentials never touch this app.")
         return None
     universe = None
@@ -207,6 +207,30 @@ with st.sidebar:
     st.caption("Order entry: **OFF** (read-only)" if not settings.enable_order_entry
                else "Order entry: **ON**")
 
+# Capability flags used to gate/annotate features across the UI.
+is_schwab_live = choice.startswith("Schwab") and live
+has_history = hasattr(provider, "daily_bars")   # Massive + Mock; not Finnhub free
+SCHWAB_ONLY = "🔒 Schwab (your account) is the only source that provides this."
+
+with st.sidebar:
+    with st.expander("ℹ️ What each source provides"):
+        st.markdown(
+            "- **Massive** — whole market, EOD prices + **historical indicators**\n"
+            "- **Finnhub** — live prices, curated list (no free history for indicators)\n"
+            "- **Schwab** — real-time, **bid/ask spread, 1m/5m intraday, premarket, "
+            "watchlists & positions**\n\n"
+            "Features that need Schwab are greyed out or hidden on the other sources.")
+
+
+@st.cache_data(show_spinner=False, ttl=1800)
+def cached_daily_bars(_provider, source_key: str, symbol: str) -> list[dict]:
+    """Historical bars for one symbol, cached (the underscore tells Streamlit not to hash the
+    provider object; source_key + symbol are the real cache key)."""
+    try:
+        return _provider.daily_bars(symbol)
+    except Exception:
+        return []
+
 
 def load_quotes():
     if provider is None:
@@ -216,15 +240,6 @@ def load_quotes():
     except Exception as e:
         st.error(f"Failed to load quotes: {e}")
         return []
-
-
-def demo_scores(seed: float) -> CategoryScores:
-    """Provisional sub-scores until the real indicator layer (EMA/MACD/RSI/VWAP) lands."""
-    return CategoryScores(
-        technical=min(100, seed * 6), momentum=min(100, seed * 5.5),
-        volume=min(100, seed * 7), premarket=min(100, seed * 4),
-        risk=max(0, 100 - seed * 4),
-    )
 
 
 # ------------------------------- header -------------------------------
@@ -253,8 +268,8 @@ if not quotes:
     st.stop()
 
 # ------------------------------- tabs -------------------------------
-tab_reco, tab_gainers, tab_pillars, tab_detail = st.tabs(
-    ["⭐ Recommendations", "🚀 Top Gainers", "🏛 Pillars Scanner", "🔍 Stock Detail"]
+tab_reco, tab_gainers, tab_pillars, tab_premarket, tab_detail = st.tabs(
+    ["⭐ Recommendations", "🚀 Top Gainers", "🏛 Pillars Scanner", "🌅 Premarket", "🔍 Stock Detail"]
 )
 
 
@@ -278,10 +293,9 @@ def reco_card_html(s: ScoredStock) -> str:
 
 
 with tab_reco:
-    st.caption("Top 5 per price band. Scores are provisional (placeholder model) until the "
-               "technical-indicator layer is built — see the roadmap.")
-    scored = [scoring.finalize(ScoredStock(quote=q, scores=demo_scores(abs(q.daily_change_pct or 0))))
-              for q in quotes]
+    st.caption("Top 5 per price band, ranked by a real signal score (day strength, gap, range, "
+               "volume). Open a stock in **Stock Detail** for the full multi-day indicator breakdown.")
+    scored = [scoring.score_quote(q) for q in quotes]
     bands = compute_bands(price_min, price_max)
     cols = st.columns(len(bands))
     for col, (label, lo, hi) in zip(cols, bands):
@@ -298,6 +312,8 @@ with tab_reco:
 _NUM_CONFIG = {
     "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
     "Change %": st.column_config.NumberColumn("Change %", format="%+.2f%%"),
+    "Gap %": st.column_config.NumberColumn("Gap %", format="%+.2f%%"),
+    "Range %": st.column_config.NumberColumn("Range %", format="%.2f%%"),
     "Volume": st.column_config.NumberColumn("Volume", format="%d"),
     "RVOL": st.column_config.NumberColumn("RVOL", format="%.2f"),
     "Float": st.column_config.NumberColumn("Float", format="%d"),
@@ -305,12 +321,16 @@ _NUM_CONFIG = {
 
 with tab_gainers:
     st.subheader("Top Gainers")
+    st.caption("Ranked by daily % change. (True *past-1-hour* ranking needs intraday data — "
+               f"{SCHWAB_ONLY.replace(chr(0x1F512)+' ', '')})")
     ranked = scanners.top_gainers(quotes)
     st.dataframe(pd.DataFrame([{
         "Symbol": q.symbol, "Company": q.company_name or "",
         "Price": round(q.price, 2), "Change %": round(q.daily_change_pct or 0, 2),
+        "Gap %": round(q.gap_pct, 2) if q.gap_pct is not None else None,
+        "Range %": round(q.range_pct, 2) if q.range_pct is not None else None,
         "Volume": q.volume, "RVOL": round(q.rvol, 2) if q.rvol else None, "Float": q.float_shares,
-    } for q in ranked]), use_container_width=True, hide_index=True, column_config=_NUM_CONFIG)
+    } for q in ranked]), width="stretch", hide_index=True, column_config=_NUM_CONFIG)
 
 with tab_pillars:
     st.subheader("Pillars Scanner")
@@ -327,8 +347,34 @@ with tab_pillars:
             "RVOL ≥5x": "✅" if p["rvol_5x"] else "—",
             "All": "🟢" if scanners.is_all_pillars(q) else "",
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
                  column_config={"Price": _NUM_CONFIG["Price"]})
+
+with tab_premarket:
+    st.subheader("Premarket Scanner")
+    if is_schwab_live:
+        st.info("Extended-hours ranking wiring is pending; below is the gap-based proxy meanwhile.")
+    else:
+        st.warning("The full premarket scanner (premarket volume, VWAP, momentum) needs "
+                   f"extended-hours data. {SCHWAB_ONLY}")
+    st.caption("Available proxy: **Gap %** (today's open vs previous close) from the current source.")
+    gap_rows = [{
+        "Symbol": q.symbol, "Company": q.company_name or "", "Price": round(q.price, 2),
+        "Gap %": round(q.gap_pct, 2) if q.gap_pct is not None else None,
+        "Change %": round(q.daily_change_pct or 0, 2), "Volume": q.volume,
+    } for q in quotes if q.gap_pct is not None]
+    gap_rows.sort(key=lambda r: r["Gap %"], reverse=True)
+    if gap_rows:
+        st.dataframe(pd.DataFrame(gap_rows), width="stretch", hide_index=True,
+                     column_config=_NUM_CONFIG)
+    else:
+        st.caption("No gap data available from this source.")
+
+
+def ema_line(closes: list[float], period: int):
+    s = indicators.ema_series(closes, period)
+    return [None] * (len(closes) - len(s)) + s
+
 
 with tab_detail:
     st.subheader("Stock Detail")
@@ -341,25 +387,86 @@ with tab_detail:
     q = next(x for x in quotes if x.symbol == symbol)
     if q.company_name:
         st.markdown(f"**{html.escape(q.company_name)}**")
-    c1, c2, c3, c4 = st.columns(4)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Price", f"${q.price:.2f}")
     c2.metric("Change", f"{q.daily_change_pct or 0:.2f}%")
-    c3.metric("RVOL", f"{q.rvol:.2f}" if q.rvol else "—")
-    c4.metric("Float", f"{q.float_shares:,}" if q.float_shares else "—")
+    c3.metric("Gap", f"{q.gap_pct:+.2f}%" if q.gap_pct is not None else "—")
+    c4.metric("Day range", f"{q.range_pct:.2f}%" if q.range_pct is not None else "—")
+    if q.bid is not None and q.ask is not None:
+        c5.metric("Spread", f"${q.ask - q.bid:.3f}")
+    else:
+        c5.metric("Spread", "🔒")
+        c5.caption("Schwab only")
 
-    base = q.price
-    candles = [(base * (1 + 0.01 * (i % 3 - 1)), base * (1 + 0.02),
-                base * (1 - 0.015), base * (1 + 0.005 * (i % 4 - 1))) for i in range(20)]
-    fig = go.Figure(data=[go.Candlestick(
-        x=list(range(len(candles))),
-        open=[o for o, h, l, c in candles], high=[h for o, h, l, c in candles],
-        low=[l for o, h, l, c in candles], close=[c for o, h, l, c in candles],
-        increasing_line_color="#0E9F6E", decreasing_line_color="#E02424",
-    )])
-    fig.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=0),
-                      xaxis_rangeslider_visible=False, template="plotly_white")
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("Placeholder candles — a real intraday chart (1m/5m) lands with the analysis layer.")
+    # Full technical breakdown from historical bars (Massive / Schwab / Mock).
+    if has_history:
+        bars = cached_daily_bars(provider, choice, symbol)
+        if len(bars) >= 30:
+            an = indicators.analyze(bars)
+            full = scoring.score_quote(q, analysis=an)
+
+            st.markdown("##### Technical indicators")
+            i1, i2, i3, i4 = st.columns(4)
+            align = an["alignment"]
+            align_color = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}[align]
+            i1.metric("EMA trend", f"{align_color} {align.title()}")
+            i2.metric("RSI (14)", f"{an['rsi']:.0f}" if an["rsi"] is not None else "—")
+            i3.metric("MACD hist", f"{an['macd_hist']:+.3f}" if an["macd_hist"] is not None else "—")
+            atr_pct = (an["atr"] / an["last_close"] * 100) if an["atr"] and an["last_close"] else None
+            i4.metric("ATR %", f"{atr_pct:.1f}%" if atr_pct is not None else "—")
+            j1, j2, j3, j4 = st.columns(4)
+            j1.metric("EMA 9", f"${an['ema9']:.2f}" if an["ema9"] else "—")
+            j2.metric("EMA 20", f"${an['ema20']:.2f}" if an["ema20"] else "—")
+            j3.metric("EMA 200", f"${an['ema200']:.2f}" if an["ema200"] else "—")
+            rvol = (q.volume / an["avg_vol_20"]) if an["avg_vol_20"] and q.volume else None
+            j4.metric("RVOL (20d)", f"{rvol:.2f}" if rvol else "—")
+
+            # Score breakdown
+            st.markdown("##### AI score breakdown")
+            brk = pd.DataFrame([
+                {"Category": cat.title(), "Score": round(getattr(full.scores, cat), 1),
+                 "Weight": f"{int(w*100)}%",
+                 "Contribution": round(getattr(full.scores, cat) * w, 1)}
+                for cat, w in scoring.WEIGHTS.items()
+            ])
+            bc1, bc2 = st.columns([2, 1])
+            bc1.dataframe(brk, width="stretch", hide_index=True)
+            bc2.metric("Overall", f"{full.overall_score:.0f}/100",
+                       f"{full.recommendation.value} · {full.risk_level.value} risk")
+
+            # Real candlestick chart with EMA overlays
+            st.markdown("##### Price (daily, with EMAs)")
+            recent = bars[-120:]
+            closes_all = [b["c"] for b in bars]
+            e20 = ema_line(closes_all, 20)[-len(recent):]
+            e200 = ema_line(closes_all, 200)[-len(recent):]
+            x = list(range(len(recent)))
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(
+                x=x, open=[b["o"] for b in recent], high=[b["h"] for b in recent],
+                low=[b["l"] for b in recent], close=[b["c"] for b in recent],
+                increasing_line_color="#0E9F6E", decreasing_line_color="#E02424", name="Price"))
+            fig.add_trace(go.Scatter(x=x, y=e20, line=dict(color="#2563EB", width=1), name="EMA 20"))
+            fig.add_trace(go.Scatter(x=x, y=e200, line=dict(color="#C2410C", width=1), name="EMA 200"))
+            fig.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=0),
+                              xaxis_rangeslider_visible=False, template="plotly_white",
+                              legend=dict(orientation="h", y=1.02, x=0))
+            st.plotly_chart(fig, width="stretch")
+
+            tf = st.radio("Chart timeframe", ["Daily (EOD)", "5 min", "1 min"], horizontal=True,
+                          index=0, disabled=not is_schwab_live)
+            if not is_schwab_live:
+                st.caption(f"Intraday 1m/5m charts: {SCHWAB_ONLY}")
+        else:
+            st.info("Not enough historical data to compute indicators for this symbol.")
+    else:
+        st.warning("Historical technical indicators (EMA/MACD/RSI/ATR) and the price chart need "
+                   "**Massive** (whole-market, has free history) or **Schwab**. Finnhub's free tier "
+                   "doesn't include historical candles.")
+
+    st.divider()
+    st.caption(f"Watchlists & positions: {SCHWAB_ONLY}")
 
     if choice.startswith("Finnhub") and hasattr(provider, "debug_symbol"):
         with st.expander("🔧 Debug Finnhub response"):
