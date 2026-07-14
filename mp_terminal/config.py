@@ -12,8 +12,9 @@ from typing import Mapping, Optional
 
 @dataclass
 class Settings:
-    data_source: str = "finnhub"             # "finnhub" (default) | "schwab" | "mock"
+    data_source: str = "finnhub"             # "finnhub" (default) | "massive" | "schwab" | "mock"
     finnhub_api_key: str = ""
+    massive_api_key: str = ""
     schwab_app_key: str = ""
     schwab_app_secret: str = ""
     schwab_redirect_uri: str = "https://mp-trading-terminal.streamlit.app"
@@ -38,6 +39,7 @@ def load_settings(source: Optional[Mapping] = None) -> Settings:
     return Settings(
         data_source=get("data_source", "finnhub"),
         finnhub_api_key=get("finnhub_api_key", ""),
+        massive_api_key=get("massive_api_key", ""),
         schwab_app_key=get("schwab_app_key", ""),
         schwab_app_secret=get("schwab_app_secret", ""),
         schwab_redirect_uri=get("schwab_redirect_uri", "https://mp-trading-terminal.streamlit.app"),

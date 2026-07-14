@@ -3,12 +3,14 @@
 Runs on Streamlit Community Cloud at https://mp-trading-terminal.streamlit.app.
 
 Data source is a user-facing toggle in the sidebar:
-  - Finnhub (default): free, no keys owned by any individual, no personal account, no login.
-                        Requires the FINNHUB_API_KEY secret (set by Kevin).
-  - Schwab (optional):  Paul's own account, real-time. Paul clicks "Connect to Schwab" and
-                        logs in himself — his credentials never pass through this app's code
-                        or its operator.
-Falls back to built-in mock data if neither is configured, so the UI always renders.
+  - Finnhub (default): free, live/intraday, but a curated ~20-symbol list (no whole-market
+                       call on the free tier). No personal account, no login.
+  - Massive (whole market): free, every U.S. ticker in the $2-20 band, but End-of-Day only —
+                       refreshes once per trading day, not intraday. No personal account.
+  - Schwab (optional): Paul's own account, real-time. Paul clicks "Connect to Schwab" and
+                       logs in himself — his credentials never pass through this app's code
+                       or its operator.
+Falls back to built-in mock data if none are configured, so the UI always renders.
 """
 from __future__ import annotations
 
@@ -97,20 +99,42 @@ def build_finnhub_provider():
     return FinnhubMarketData(settings.finnhub_api_key, universe=universe)
 
 
+@st.cache_resource
+def _cached_massive_provider(api_key: str):
+    from mp_terminal.massive_provider import MassiveMarketData
+    return MassiveMarketData(api_key, price_min=settings.price_min, price_max=settings.price_max)
+
+
+def build_massive_provider():
+    """Return a whole-market, EOD Massive provider, or None if no key is configured.
+
+    Cached per API key via st.cache_resource so the (slow, rate-limited) two-day fetch
+    only happens once per app run, not on every Streamlit rerun/interaction.
+    """
+    if not settings.massive_api_key:
+        return None
+    return _cached_massive_provider(settings.massive_api_key)
+
+
 # --- user-facing data-source toggle (sidebar) ---
-_DEFAULT_CHOICE = "Schwab (your account)" if settings.data_source == "schwab" else "Finnhub (default)"
+_SOURCE_OPTIONS = ["Finnhub (live, curated)", "Massive (whole market, EOD)", "Schwab (your account)"]
+_DEFAULT_INDEX = {"finnhub": 0, "massive": 1, "schwab": 2}.get(settings.data_source, 0)
 with st.sidebar:
     st.header("Data Source")
-    choice = st.radio(
-        "Choose a source", ["Finnhub (default)", "Schwab (your account)"],
-        index=0 if _DEFAULT_CHOICE.startswith("Finnhub") else 1,
-        label_visibility="collapsed",
-    )
+    choice = st.radio("Choose a source", _SOURCE_OPTIONS, index=_DEFAULT_INDEX,
+                       label_visibility="collapsed")
 
 live = False
 if choice.startswith("Schwab"):
     provider = build_schwab_provider()
     live = provider is not None
+elif choice.startswith("Massive"):
+    provider = build_massive_provider()
+    if provider is None:
+        st.sidebar.warning("MASSIVE_API_KEY not set — showing mock data.")
+        provider = MockMarketData()
+    else:
+        live = True
 else:
     provider = build_finnhub_provider()
     if provider is None:
@@ -151,14 +175,22 @@ with st.sidebar:
         st.success("Data source: Schwab (LIVE — your account)")
     elif choice.startswith("Schwab"):
         st.info("Data source: Schwab — awaiting authorization")
+    elif choice.startswith("Massive"):
+        st.success("Data source: Massive (whole market, EOD)")
     else:
-        st.success("Data source: Finnhub (LIVE)")
+        st.success("Data source: Finnhub (LIVE, curated list)")
     st.metric("Order entry", "ON" if settings.enable_order_entry else "OFF (read-only)")
     st.divider()
     st.caption("Schwab callback URL (if you connect):")
     st.code(settings.schwab_redirect_uri, language=None)
 
 quotes = load_quotes()
+
+if choice.startswith("Massive") and live and hasattr(provider, "as_of_dates"):
+    dates = provider.as_of_dates
+    if dates:
+        st.info(f"📅 Whole-market data as of **{dates[0]}** (previous close: {dates[1]}). "
+                "Refreshes once per trading day — not intraday.")
 
 if choice.startswith("Schwab") and not live:
     st.info("👈 Click **Connect to Schwab** in the sidebar to authorize your account's live data.")
@@ -204,7 +236,7 @@ with tab_gainers:
 with tab_pillars:
     st.subheader("Pillars Scanner")
     st.caption("Price $2–20 · Day gain ≥10% · Float ≤20M · RVOL ≥5x  "
-               "(news-catalyst pillar removed in Schwab-only scope)")
+               "(news-catalyst pillar not available from any current data source)")
     rows = []
     for q in quotes:
         p = scanners.pillars_match(q)
