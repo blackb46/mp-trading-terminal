@@ -25,19 +25,11 @@ from urllib.parse import urlencode
 import httpx
 
 from mp_terminal.models import Quote
-from mp_terminal.providers import MarketDataProvider
+from mp_terminal.providers import DEFAULT_UNIVERSE, MarketDataProvider
 
 AUTHORIZE_URL = "https://api.schwabapi.com/v1/oauth/authorize"
 TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
 MARKETDATA_BASE = "https://api.schwabapi.com/marketdata/v1"
-
-# Default starter universe (a configurable list of tickers; the $2-20 price band is applied
-# on top). Schwab has no whole-market screener, so scanning runs over this list. Edit via the
-# SCHWAB_UNIVERSE secret (comma-separated) or replace with an imported CSV later.
-DEFAULT_UNIVERSE = [
-    "F", "SOFI", "PLUG", "NIO", "SNAP", "RIG", "AMCR", "KGC", "HBAN", "BTG",
-    "GOLD", "VALE", "NOK", "GRAB", "LU", "CLSK", "MARA", "RIOT", "IQ", "WBD",
-]
 
 
 class SchwabError(Exception):

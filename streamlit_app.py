@@ -2,9 +2,13 @@
 
 Runs on Streamlit Community Cloud at https://mp-trading-terminal.streamlit.app.
 
-Data source is controlled by the DATA_SOURCE secret:
-  - "mock"   : built-in demo data (no keys needed) — good for UI work.
-  - "schwab" : live Schwab Trader API. Requires a one-time OAuth login (button in the sidebar).
+Data source is a user-facing toggle in the sidebar:
+  - Finnhub (default): free, no keys owned by any individual, no personal account, no login.
+                        Requires the FINNHUB_API_KEY secret (set by Kevin).
+  - Schwab (optional):  Paul's own account, real-time. Paul clicks "Connect to Schwab" and
+                        logs in himself — his credentials never pass through this app's code
+                        or its operator.
+Falls back to built-in mock data if neither is configured, so the UI always renders.
 """
 from __future__ import annotations
 
@@ -80,13 +84,40 @@ def build_schwab_provider():
     )
 
 
-# --- resolve the data provider ---
-if settings.data_source == "schwab":
+def build_finnhub_provider():
+    """Return a live Finnhub provider, or None (falls back to mock) if no key is configured."""
+    from mp_terminal.finnhub_provider import FinnhubMarketData
+
+    if not settings.finnhub_api_key:
+        return None
+    universe = None
+    raw_uni = st.secrets.get("FINNHUB_UNIVERSE") if hasattr(st, "secrets") else None
+    if raw_uni:
+        universe = [s.strip().upper() for s in str(raw_uni).split(",") if s.strip()]
+    return FinnhubMarketData(settings.finnhub_api_key, universe=universe)
+
+
+# --- user-facing data-source toggle (sidebar) ---
+_DEFAULT_CHOICE = "Schwab (your account)" if settings.data_source == "schwab" else "Finnhub (default)"
+with st.sidebar:
+    st.header("Data Source")
+    choice = st.radio(
+        "Choose a source", ["Finnhub (default)", "Schwab (your account)"],
+        index=0 if _DEFAULT_CHOICE.startswith("Finnhub") else 1,
+        label_visibility="collapsed",
+    )
+
+live = False
+if choice.startswith("Schwab"):
     provider = build_schwab_provider()
     live = provider is not None
 else:
-    provider = MockMarketData()
-    live = False
+    provider = build_finnhub_provider()
+    if provider is None:
+        st.sidebar.warning("FINNHUB_API_KEY not set — showing mock data.")
+        provider = MockMarketData()
+    else:
+        live = True
 
 
 def load_quotes():
@@ -95,7 +126,7 @@ def load_quotes():
     try:
         return provider.all_quotes()
     except Exception as e:
-        st.error(f"Failed to load quotes from Schwab: {e}")
+        st.error(f"Failed to load quotes: {e}")
         return []
 
 
@@ -110,30 +141,31 @@ def demo_scores(seed: float) -> CategoryScores:
 
 # ------------------------------- Header / sidebar -------------------------------
 st.title("📈 M&P Trading Terminal")
-st.caption("AI-powered short-term stock discovery · Schwab-only scope · $2–$20 universe")
+st.caption("AI-powered short-term stock discovery · $2–$20 universe")
 
 with st.sidebar:
     st.header("Status")
-    if settings.data_source == "schwab" and live:
-        st.success("Data source: Schwab (LIVE)")
-    elif settings.data_source == "schwab":
+    if isinstance(provider, MockMarketData):
+        st.warning("Data source: MOCK (demo data)")
+    elif choice.startswith("Schwab") and live:
+        st.success("Data source: Schwab (LIVE — your account)")
+    elif choice.startswith("Schwab"):
         st.info("Data source: Schwab — awaiting authorization")
     else:
-        st.warning("Data source: MOCK (demo data)")
-        st.caption("Set the `data_source` secret to `schwab` to go live.")
+        st.success("Data source: Finnhub (LIVE)")
     st.metric("Order entry", "ON" if settings.enable_order_entry else "OFF (read-only)")
     st.divider()
-    st.caption("Callback URL registered with Schwab:")
+    st.caption("Schwab callback URL (if you connect):")
     st.code(settings.schwab_redirect_uri, language=None)
 
 quotes = load_quotes()
 
-if settings.data_source == "schwab" and not live:
-    st.info("👈 Click **Connect to Schwab** in the sidebar to authorize live data.")
+if choice.startswith("Schwab") and not live:
+    st.info("👈 Click **Connect to Schwab** in the sidebar to authorize your account's live data.")
     st.stop()
 
 if not quotes:
-    st.warning("No quotes returned. Check the universe list or Schwab connection.")
+    st.warning("No quotes returned. Check the universe list or the data-source connection.")
     st.stop()
 
 # ------------------------------- Tabs -------------------------------

@@ -1,13 +1,23 @@
 """Data providers.
 
-Schwab-only scope: the app has one real provider (Schwab, in schwab.py) plus a Mock provider
-so the dashboard runs with no API keys — essential for developing the UI before Schwab approval.
+Two real providers: Finnhub (mp_terminal/finnhub_provider.py, default — free, no KYC, no
+personal account) and Schwab (mp_terminal/schwab.py, optional — Paul's account, real-time,
+requires his own OAuth login). Plus a Mock provider so the dashboard runs with no keys at all.
+The Streamlit app lets the user toggle between Finnhub and Schwab in the sidebar.
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
 from mp_terminal.models import Quote
+
+# Default starter universe (a configurable list of tickers; the $2-20 price band is applied
+# on top). Neither Finnhub's free tier nor Schwab has a whole-market screener, so scanning
+# runs over this list. Replace with an imported CSV / expanded list later.
+DEFAULT_UNIVERSE = [
+    "F", "SOFI", "PLUG", "NIO", "SNAP", "RIG", "AMCR", "KGC", "HBAN", "BTG",
+    "GOLD", "VALE", "NOK", "GRAB", "LU", "CLSK", "MARA", "RIOT", "IQ", "WBD",
+]
 
 
 class MarketDataProvider(ABC):
