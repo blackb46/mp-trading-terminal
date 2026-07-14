@@ -286,6 +286,11 @@ if not quotes:
                         "Try widening the range.")
     st.stop()
 
+# Score everything once (cheap — pure arithmetic, no API calls) so Recommendations and the
+# Stock Detail default both use it. The highest-scored symbol is the sensible landing pick.
+scored = [scoring.score_quote(q) for q in quotes]
+top_symbol = max(scored, key=lambda s: s.overall_score).quote.symbol if scored else quotes[0].symbol
+
 # ------------------------------- tabs -------------------------------
 tab_reco, tab_gainers, tab_pillars, tab_premarket, tab_detail = st.tabs(
     ["⭐ Recommendations", "🚀 Top Gainers", "🏛 Pillars Scanner", "🌅 Premarket", "🔍 Stock Detail"]
@@ -314,7 +319,6 @@ def reco_card_html(s: ScoredStock) -> str:
 with tab_reco:
     st.caption("Top 5 per price band, ranked by a real signal score (day strength, gap, range, "
                "volume). Open a stock in **Stock Detail** for the full multi-day indicator breakdown.")
-    scored = [scoring.score_quote(q) for q in quotes]
     bands = compute_bands(price_min, price_max)
     cols = st.columns(len(bands))
     for col, (label, lo, hi) in zip(cols, bands):
@@ -401,7 +405,18 @@ with tab_detail:
         (f"{q.symbol} — {q.company_name}" if q.company_name else q.symbol): q.symbol
         for q in quotes
     }
-    chosen_label = st.selectbox("Search by ticker or company name", sorted(labels_to_symbol))
+    ordered_labels = sorted(labels_to_symbol)
+    # Default to the top-ranked recommendation rather than the first-alphabetical symbol
+    # (which is often a thin, newly-listed ticker with no indicator history).
+    default_label = next((lbl for lbl in ordered_labels
+                          if labels_to_symbol[lbl] == top_symbol), ordered_labels[0])
+    # Whether names are searchable depends on the source: Massive whole-market carries names
+    # lazily (rate limits), so its search matches tickers only.
+    names_searchable = any(q.company_name for q in quotes[:50])
+    search_label = ("Search by ticker or company name" if names_searchable
+                    else "Search by ticker (company names load when you open a stock)")
+    chosen_label = st.selectbox(search_label, ordered_labels,
+                                index=ordered_labels.index(default_label))
     symbol = labels_to_symbol[chosen_label]
     q = next(x for x in quotes if x.symbol == symbol)
     # Massive carries no name on whole-market quotes (rate limits); resolve it lazily here.
