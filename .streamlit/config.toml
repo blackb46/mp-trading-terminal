@@ -1,10 +1,11 @@
-# Dark theme to match the Bloomberg/TradingView-style intent.
+# Clean, light, professional theme (replaces the earlier dark/neon look).
 [theme]
-base = "dark"
-primaryColor = "#39FF14"          # neon green for high-velocity emphasis
-backgroundColor = "#0E1117"
-secondaryBackgroundColor = "#161B22"
-textColor = "#E6EDF3"
+base = "light"
+primaryColor = "#0E9F6E"           # refined green accent
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8FAFC"
+textColor = "#0F172A"
+font = "sans serif"
 
 [server]
 headless = true
