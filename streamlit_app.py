@@ -135,8 +135,13 @@ def build_finnhub_provider():
     return FinnhubMarketData(settings.finnhub_api_key, universe=universe)
 
 
+# Bump when the Massive adapter changes, to force st.cache_resource to build a fresh provider
+# on deploy (the cache otherwise survives script hot-reloads and can serve a stale object).
+_MASSIVE_CACHE_VERSION = "v3"
+
+
 @st.cache_resource
-def _cached_massive_provider(api_key: str, price_min: float, price_max: float):
+def _cached_massive_provider(api_key: str, price_min: float, price_max: float, version: str):
     from mp_terminal.massive_provider import MassiveMarketData
     return MassiveMarketData(api_key, price_min=price_min, price_max=price_max)
 
@@ -144,8 +149,9 @@ def _cached_massive_provider(api_key: str, price_min: float, price_max: float):
 def build_massive_provider(price_min: float, price_max: float):
     if not settings.massive_api_key:
         return None
-    # Cache key includes the range so changing the slider rebuilds with the new band.
-    return _cached_massive_provider(settings.massive_api_key, price_min, price_max)
+    # Cache key includes the range + version so the slider or a deploy rebuilds the provider.
+    return _cached_massive_provider(settings.massive_api_key, price_min, price_max,
+                                    _MASSIVE_CACHE_VERSION)
 
 
 def compute_bands(pmin: float, pmax: float):
@@ -170,6 +176,10 @@ with st.sidebar:
     )
     st.caption(f"Scanning **\\${price_min:g} – \\${price_max:g}**  ·  "
                f"priority \\${settings.priority_min:g}–{settings.priority_max:g}")
+    if st.button("🔄 Refresh data", width="stretch"):
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        st.rerun()
 
 # ------------------------------- resolve provider -------------------------------
 live = False
