@@ -158,8 +158,11 @@ class SchwabMarketData(MarketDataProvider):
         """
         q = node.get("quote", {}) or {}
         f = node.get("fundamental", {}) or {}
+        ref = node.get("reference", {}) or {}
         return Quote(
             symbol=symbol,
+            # Schwab's reference block carries the company/security name as "description".
+            company_name=ref.get("description"),
             price=q.get("lastPrice") or q.get("mark") or 0.0,
             bid=q.get("bidPrice"),
             ask=q.get("askPrice"),

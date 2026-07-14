@@ -254,7 +254,14 @@ with tab_pillars:
 
 with tab_detail:
     st.subheader("Stock Detail")
-    symbol = st.selectbox("Symbol", [q.symbol for q in quotes])
+    # Label each option "TICKER — Company Name" so Streamlit's built-in type-to-filter on the
+    # selectbox matches against either the ticker or the name, not just the ticker.
+    labels_to_symbol = {
+        (f"{q.symbol} — {q.company_name}" if q.company_name else q.symbol): q.symbol
+        for q in quotes
+    }
+    chosen_label = st.selectbox("Search by ticker or company name", sorted(labels_to_symbol))
+    symbol = labels_to_symbol[chosen_label]
     q = next(x for x in quotes if x.symbol == symbol)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Price", f"${q.price:.2f}")

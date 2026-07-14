@@ -42,6 +42,7 @@ class FinnhubMarketData(MarketDataProvider):
         self.api_key = api_key
         self._universe = universe or DEFAULT_UNIVERSE
         self._financials_cache: dict[str, dict] = {}
+        self._name_cache: dict[str, str | None] = {}
 
     def _get(self, path: str, **params) -> dict:
         params["token"] = self.api_key
@@ -97,6 +98,12 @@ class FinnhubMarketData(MarketDataProvider):
             self._financials_cache[symbol] = (data or {}).get("metric", {}) or {}
         return self._financials_cache[symbol]
 
+    def _company_name(self, symbol: str) -> str | None:
+        if symbol not in self._name_cache:
+            data = self._get_safe("/stock/profile2", symbol=symbol)
+            self._name_cache[symbol] = (data or {}).get("name")
+        return self._name_cache[symbol]
+
     def snapshot(self, symbol: str) -> Quote:
         q = self._get("/quote", symbol=symbol)  # required — let failures propagate
         return self._build_quote(symbol, q)
@@ -120,6 +127,7 @@ class FinnhubMarketData(MarketDataProvider):
         shares_out = f.get("shareOutstanding")
         return Quote(
             symbol=symbol,
+            company_name=self._company_name(symbol),
             price=q.get("c") or 0.0,
             prev_close=q.get("pc"),
             volume=self._today_volume(symbol),

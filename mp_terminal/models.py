@@ -21,6 +21,7 @@ class RiskLevel(str, Enum):
 
 class Quote(BaseModel):
     symbol: str
+    company_name: Optional[str] = None
     price: float
     bid: Optional[float] = None
     ask: Optional[float] = None

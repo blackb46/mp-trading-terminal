@@ -40,6 +40,40 @@ class MassiveMarketData(MarketDataProvider):
         self._quotes_cache: list[Quote] | None = None
         self._dates_used: tuple[str, str] | None = None
 
+    def _load_name_index(self, tickers_needed: set[str]) -> dict[str, str]:
+        """Ticker -> company name, via the free '/v3/reference/tickers' endpoint.
+
+        Paginates (up to a cap) until every ticker we actually need is resolved or the cap
+        is hit, pacing calls to stay under the free tier's 5 calls/minute. This only runs
+        once per cached provider instance (see streamlit_app.py's st.cache_resource wrapper),
+        so the one-time cost doesn't repeat on every page load.
+        """
+        names: dict[str, str] = {}
+        url = f"{BASE_URL}/v3/reference/tickers"
+        params = {"apiKey": self.api_key, "market": "stocks", "active": "true",
+                  "limit": 1000, "sort": "ticker", "order": "asc"}
+        pages = 0
+        while url and pages < 15 and len(names) < len(tickers_needed):
+            try:
+                r = httpx.get(url, params=params if pages == 0 else None, timeout=30)
+            except Exception:
+                break
+            pages += 1
+            if r.status_code != 200:
+                break
+            data = r.json()
+            for row in data.get("results", []):
+                t, n = row.get("ticker"), row.get("name")
+                if t in tickers_needed and n:
+                    names[t] = n
+            url = data.get("next_url")
+            if url:
+                url = f"{url}&apiKey={self.api_key}"
+                params = None
+            if url and pages < 15 and len(names) < len(tickers_needed):
+                time.sleep(1.5)  # stay well under 5 calls/minute
+        return names
+
     def _fetch_grouped(self, day: date) -> dict[str, dict] | None:
         r = httpx.get(
             f"{BASE_URL}/v2/aggs/grouped/locale/us/market/stocks/{day.isoformat()}",
@@ -80,16 +114,24 @@ class MassiveMarketData(MarketDataProvider):
             return
         (latest_date, latest_bars), (prev_date, prev_bars) = days[0], days[1]
         self._dates_used = (latest_date, prev_date)
-        out = []
+
+        # Filter to the price band first so the name lookup only needs to resolve the
+        # (much smaller) set of tickers we're actually going to show.
+        in_band = {}
         for ticker, bar in latest_bars.items():
             price = bar.get("c")
-            if price is None or not (self.price_min <= price <= self.price_max):
-                continue
+            if price is not None and self.price_min <= price <= self.price_max:
+                in_band[ticker] = bar
+        names = self._load_name_index(set(in_band.keys()))
+
+        out = []
+        for ticker, bar in in_band.items():
             prev_bar = prev_bars.get(ticker)
             raw_volume = bar.get("v")
             out.append(Quote(
                 symbol=ticker,
-                price=price,
+                company_name=names.get(ticker),
+                price=bar["c"],
                 prev_close=prev_bar.get("c") if prev_bar else None,
                 # Massive's grouped volume can come back as a float; Quote.volume is int.
                 volume=int(round(raw_volume)) if raw_volume is not None else None,
