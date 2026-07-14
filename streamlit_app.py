@@ -265,6 +265,15 @@ if choice.startswith("Schwab") and not live:
 
 if not quotes:
     st.warning("No stocks in the selected price range. Widen the range in the sidebar.")
+    if choice.startswith("Massive") and hasattr(provider, "diagnostics"):
+        with st.expander("🔧 Massive data diagnostics (why no stocks loaded)", expanded=True):
+            diag = provider.diagnostics
+            if diag:
+                for line in diag:
+                    st.text(line)
+            else:
+                st.text("No diagnostics captured — the price band may simply have no matches. "
+                        "Try widening the range.")
     st.stop()
 
 # ------------------------------- tabs -------------------------------

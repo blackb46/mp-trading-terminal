@@ -40,6 +40,7 @@ class MassiveMarketData(MarketDataProvider):
         self._quotes_cache: list[Quote] | None = None
         self._dates_used: tuple[str, str] | None = None
         self._name_cache: dict[str, str | None] = {}
+        self.diagnostics: list[str] = []   # per grouped-daily attempt, for UI troubleshooting
 
     def company_name(self, symbol: str) -> str | None:
         """Resolve one ticker's company name on demand (1 call). Used lazily for the selected
@@ -61,15 +62,22 @@ class MassiveMarketData(MarketDataProvider):
         return name
 
     def _fetch_grouped(self, day: date) -> dict[str, dict] | None:
-        r = httpx.get(
-            f"{BASE_URL}/v2/aggs/grouped/locale/us/market/stocks/{day.isoformat()}",
-            params={"apiKey": self.api_key, "adjusted": "true"},
-            timeout=30,
-        )
+        try:
+            r = httpx.get(
+                f"{BASE_URL}/v2/aggs/grouped/locale/us/market/stocks/{day.isoformat()}",
+                params={"apiKey": self.api_key, "adjusted": "true"},
+                timeout=30,
+            )
+        except Exception as e:
+            self.diagnostics.append(f"{day}: request error {type(e).__name__}")
+            return None
         if r.status_code != 200:
+            self.diagnostics.append(f"{day}: HTTP {r.status_code} — {r.text[:160]}")
             return None
         data = r.json()
-        if not data.get("results"):
+        n = len(data.get("results") or [])
+        self.diagnostics.append(f"{day}: HTTP 200, status={data.get('status')}, results={n}")
+        if not n:
             return None
         return {row["T"]: row for row in data["results"] if "T" in row}
 
@@ -81,14 +89,16 @@ class MassiveMarketData(MarketDataProvider):
         found: list[tuple[str, dict[str, dict]]] = []
         day = date.today() - timedelta(days=1)
         attempts = 0
-        while len(found) < 2 and attempts < 10:
+        # Walk back generously: the free tier may gate the most recent day(s), so we may need
+        # to reach a slightly older trading day. Paced to stay under 5 calls/minute.
+        while len(found) < 2 and attempts < 20:
             bars = self._fetch_grouped(day)
             if bars:
                 found.append((day.isoformat(), bars))
             day -= timedelta(days=1)
             attempts += 1
-            if attempts < 10 and len(found) < 2:
-                time.sleep(1.5)  # stay well under 5 calls/minute
+            if attempts < 20 and len(found) < 2:
+                time.sleep(1.5)
         return found
 
     def _load(self) -> None:
