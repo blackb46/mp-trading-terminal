@@ -241,3 +241,13 @@ with tab_detail:
                       xaxis_rangeslider_visible=False, template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Demo candles — replaced by Schwab /pricehistory (1m/5m) once the analysis layer lands.")
+
+    if choice.startswith("Finnhub") and hasattr(provider, "debug_symbol"):
+        with st.expander("🔧 Debug Finnhub response (raw, for diagnosing missing Volume/Float)"):
+            st.caption("Shows the raw status + body for each endpoint this app calls for "
+                       "the selected symbol — no data leaves this browser tab.")
+            debug = provider.debug_symbol(symbol)
+            for label in ("quote", "candle", "metric"):
+                info = debug.get(label, {})
+                st.markdown(f"**/{ 'stock/' + label if label != 'quote' else label }** — status: `{info.get('status')}`")
+                st.json(info.get("body"), expanded=False)

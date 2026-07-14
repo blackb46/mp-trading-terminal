@@ -61,6 +61,27 @@ class FinnhubMarketData(MarketDataProvider):
         except Exception:
             return None
 
+    def debug_symbol(self, symbol: str) -> dict:
+        """Raw request/response info for /quote, /stock/candle, /stock/metric — for
+        diagnosing which endpoint(s) the current API key/plan can't access. Never raises.
+        """
+        out: dict = {}
+        for label, path, params in [
+            ("quote", "/quote", {"symbol": symbol}),
+            ("candle", "/stock/candle", {
+                "symbol": symbol, "resolution": "D",
+                "from": _today_start_epoch(), "to": int(time.time()),
+            }),
+            ("metric", "/stock/metric", {"symbol": symbol, "metric": "all"}),
+        ]:
+            try:
+                params_with_token = dict(params, token=self.api_key)
+                r = httpx.get(f"{BASE_URL}{path}", params=params_with_token, timeout=30)
+                out[label] = {"status": r.status_code, "body": r.json() if r.status_code == 200 else r.text}
+            except Exception as e:
+                out[label] = {"status": "exception", "body": str(e)}
+        return out
+
     def _today_volume(self, symbol: str) -> int | None:
         data = self._get_safe(
             "/stock/candle", symbol=symbol, resolution="D",
