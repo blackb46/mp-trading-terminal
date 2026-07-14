@@ -164,7 +164,9 @@ class SchwabMarketData(MarketDataProvider):
             bid=q.get("bidPrice"),
             ask=q.get("askPrice"),
             prev_close=q.get("closePrice"),
-            volume=q.get("totalVolume"),
+            # Guard against a float volume (Quote.volume is int) — seen from Massive; Schwab
+            # hasn't shown it in testing but the same guard costs nothing here.
+            volume=int(round(q["totalVolume"])) if q.get("totalVolume") is not None else None,
             # Schwab exposes avg 10-day / 1-year volume, not 30-day — 10-day used as the RVOL base.
             avg_volume_30d=int(f["avg10DaysVolume"]) if f.get("avg10DaysVolume") else None,
             # True float isn't in the quote payload; sharesOutstanding is the closest proxy.

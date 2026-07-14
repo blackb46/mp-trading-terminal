@@ -3,10 +3,10 @@
 Runs on Streamlit Community Cloud at https://mp-trading-terminal.streamlit.app.
 
 Data source is a user-facing toggle in the sidebar:
-  - Finnhub (default): free, live/intraday, but a curated ~20-symbol list (no whole-market
-                       call on the free tier). No personal account, no login.
-  - Massive (whole market): free, every U.S. ticker in the $2-20 band, but End-of-Day only —
+  - Massive (default): free, every U.S. ticker in the $2-20 band, but End-of-Day only —
                        refreshes once per trading day, not intraday. No personal account.
+  - Finnhub:           free, live/intraday, but a curated ~20-symbol list (no whole-market
+                       call on the free tier). No personal account, no login.
   - Schwab (optional): Paul's own account, real-time. Paul clicks "Connect to Schwab" and
                        logs in himself — his credentials never pass through this app's code
                        or its operator.
@@ -30,7 +30,9 @@ try:
 except Exception:
     settings = load_settings()
 
-PRICE_BANDS = [("$2–3", 2, 3), ("$3–5", 3, 5), ("$5–10", 5, 10), ("$10–20", 10, 20)]
+# Dollar signs are escaped (\$) because these labels are rendered via st.markdown, which
+# treats a bare "$" as a LaTeX math delimiter and mangles the text (e.g. "$2–$20" -> "2–2–20").
+PRICE_BANDS = [("\\$2–3", 2, 3), ("\\$3–5", 3, 5), ("\\$5–10", 5, 10), ("\\$10–20", 10, 20)]
 
 
 # --- token store: survives reruns/sessions until the app reboots (Community Cloud is ephemeral,
@@ -117,8 +119,8 @@ def build_massive_provider():
 
 
 # --- user-facing data-source toggle (sidebar) ---
-_SOURCE_OPTIONS = ["Finnhub (live, curated)", "Massive (whole market, EOD)", "Schwab (your account)"]
-_DEFAULT_INDEX = {"finnhub": 0, "massive": 1, "schwab": 2}.get(settings.data_source, 0)
+_SOURCE_OPTIONS = ["Massive (whole market, EOD)", "Finnhub (live, curated)", "Schwab (your account)"]
+_DEFAULT_INDEX = {"massive": 0, "finnhub": 1, "schwab": 2}.get(settings.data_source, 0)
 with st.sidebar:
     st.header("Data Source")
     choice = st.radio("Choose a source", _SOURCE_OPTIONS, index=_DEFAULT_INDEX,
@@ -165,7 +167,7 @@ def demo_scores(seed: float) -> CategoryScores:
 
 # ------------------------------- Header / sidebar -------------------------------
 st.title("📈 M&P Trading Terminal")
-st.caption("AI-powered short-term stock discovery · $2–$20 universe")
+st.caption("AI-powered short-term stock discovery · \\$2–\\$20 universe")
 
 with st.sidebar:
     st.header("Status")
@@ -235,7 +237,7 @@ with tab_gainers:
 
 with tab_pillars:
     st.subheader("Pillars Scanner")
-    st.caption("Price $2–20 · Day gain ≥10% · Float ≤20M · RVOL ≥5x  "
+    st.caption("Price \\$2–20 · Day gain ≥10% · Float ≤20M · RVOL ≥5x  "
                "(news-catalyst pillar not available from any current data source)")
     rows = []
     for q in quotes:

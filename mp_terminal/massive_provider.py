@@ -86,11 +86,13 @@ class MassiveMarketData(MarketDataProvider):
             if price is None or not (self.price_min <= price <= self.price_max):
                 continue
             prev_bar = prev_bars.get(ticker)
+            raw_volume = bar.get("v")
             out.append(Quote(
                 symbol=ticker,
                 price=price,
                 prev_close=prev_bar.get("c") if prev_bar else None,
-                volume=bar.get("v"),
+                # Massive's grouped volume can come back as a float; Quote.volume is int.
+                volume=int(round(raw_volume)) if raw_volume is not None else None,
                 day_low=bar.get("l"),
                 day_high=bar.get("h"),
                 # avg_volume_30d / float_shares not available from this endpoint — RVOL will

@@ -12,7 +12,7 @@ from typing import Mapping, Optional
 
 @dataclass
 class Settings:
-    data_source: str = "finnhub"             # "finnhub" (default) | "massive" | "schwab" | "mock"
+    data_source: str = "massive"              # "massive" (default) | "finnhub" | "schwab" | "mock"
     finnhub_api_key: str = ""
     massive_api_key: str = ""
     schwab_app_key: str = ""
@@ -37,7 +37,7 @@ def load_settings(source: Optional[Mapping] = None) -> Settings:
         return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
     return Settings(
-        data_source=get("data_source", "finnhub"),
+        data_source=get("data_source", "massive"),
         finnhub_api_key=get("finnhub_api_key", ""),
         massive_api_key=get("massive_api_key", ""),
         schwab_app_key=get("schwab_app_key", ""),
