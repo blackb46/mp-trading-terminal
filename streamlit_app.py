@@ -287,9 +287,22 @@ if not quotes:
     st.stop()
 
 # Score everything once (cheap — pure arithmetic, no API calls) so Recommendations and the
-# Stock Detail default both use it. The highest-scored symbol is the sensible landing pick.
-scored = [scoring.score_quote(q) for q in quotes]
-top_symbol = max(scored, key=lambda s: s.overall_score).quote.symbol if scored else quotes[0].symbol
+# Stock Detail default both use it. Whole-market data is heterogeneous (thousands of tickers),
+# so score each quote defensively: a single pathological row must not crash the whole app.
+scored = []
+_score_errors = []
+for _q in quotes:
+    try:
+        scored.append(scoring.score_quote(_q))
+    except Exception as _e:  # noqa: BLE001 — surface, don't crash
+        if len(_score_errors) < 3:
+            _score_errors.append(f"{_q.symbol}: {type(_e).__name__}: {_e}")
+if _score_errors:
+    st.caption("⚠️ Some tickers were skipped while scoring: " + " | ".join(_score_errors))
+if not scored:
+    st.warning("Could not score any of the loaded stocks. See details above.")
+    st.stop()
+top_symbol = max(scored, key=lambda s: s.overall_score).quote.symbol
 
 # ------------------------------- tabs -------------------------------
 tab_reco, tab_gainers, tab_pillars, tab_premarket, tab_detail = st.tabs(
