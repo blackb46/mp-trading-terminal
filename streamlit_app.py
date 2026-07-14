@@ -137,7 +137,7 @@ def build_finnhub_provider():
 
 # Bump when the Massive adapter changes, to force st.cache_resource to build a fresh provider
 # on deploy (the cache otherwise survives script hot-reloads and can serve a stale object).
-_MASSIVE_CACHE_VERSION = "v3"
+_MASSIVE_CACHE_VERSION = "v4"
 
 
 @st.cache_resource

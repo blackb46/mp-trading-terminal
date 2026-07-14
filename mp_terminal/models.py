@@ -1,6 +1,7 @@
 """Core data models shared across scanners and the scoring engine."""
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -80,11 +81,17 @@ class CategoryScores(BaseModel):
     risk: float = 0.0          # weight 7%
 
 
-class ScoredStock(BaseModel):
+# ScoredStock is a plain dataclass, NOT a pydantic model, on purpose: it nests a Quote, and a
+# pydantic model would try to (re)validate that nested Quote. Under Streamlit's cache_resource,
+# provider objects (and the Quote instances they hold) can outlive a code redeploy, so a cached
+# Quote may be an instance of a *previous* Quote class version — which pydantic revalidation
+# rejects wholesale. A dataclass just stores the objects, sidestepping that entirely.
+@dataclass
+class ScoredStock:
     quote: Quote
     company_name: Optional[str] = None
     overall_score: float = 0.0
     ai_confidence: float = 0.0
     recommendation: Recommendation = Recommendation.HOLD
     risk_level: RiskLevel = RiskLevel.MODERATE
-    scores: CategoryScores = CategoryScores()
+    scores: CategoryScores = field(default_factory=CategoryScores)
