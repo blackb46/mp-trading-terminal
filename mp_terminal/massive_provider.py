@@ -39,40 +39,26 @@ class MassiveMarketData(MarketDataProvider):
         self.price_max = price_max
         self._quotes_cache: list[Quote] | None = None
         self._dates_used: tuple[str, str] | None = None
+        self._name_cache: dict[str, str | None] = {}
 
-    def _load_name_index(self, tickers_needed: set[str]) -> dict[str, str]:
-        """Ticker -> company name, via the free '/v3/reference/tickers' endpoint.
-
-        Paginates (up to a cap) until every ticker we actually need is resolved or the cap
-        is hit, pacing calls to stay under the free tier's 5 calls/minute. This only runs
-        once per cached provider instance (see streamlit_app.py's st.cache_resource wrapper),
-        so the one-time cost doesn't repeat on every page load.
-        """
-        names: dict[str, str] = {}
-        url = f"{BASE_URL}/v3/reference/tickers"
-        params = {"apiKey": self.api_key, "market": "stocks", "active": "true",
-                  "limit": 1000, "sort": "ticker", "order": "asc"}
-        pages = 0
-        while url and pages < 15 and len(names) < len(tickers_needed):
-            try:
-                r = httpx.get(url, params=params if pages == 0 else None, timeout=30)
-            except Exception:
-                break
-            pages += 1
-            if r.status_code != 200:
-                break
-            data = r.json()
-            for row in data.get("results", []):
-                t, n = row.get("ticker"), row.get("name")
-                if t in tickers_needed and n:
-                    names[t] = n
-            url = data.get("next_url")
-            if url:
-                url = f"{url}&apiKey={self.api_key}"
-                params = None
-            if url and pages < 15 and len(names) < len(tickers_needed):
-                time.sleep(1.5)  # stay well under 5 calls/minute
-        return names
+    def company_name(self, symbol: str) -> str | None:
+        """Resolve one ticker's company name on demand (1 call). Used lazily for the selected
+        Stock Detail symbol — NOT for the whole market, which would blow the 5 calls/minute
+        free-tier limit and starve the price-data calls (an earlier bug)."""
+        if symbol in self._name_cache:
+            return self._name_cache[symbol]
+        name = None
+        try:
+            r = httpx.get(f"{BASE_URL}/v3/reference/tickers",
+                          params={"apiKey": self.api_key, "ticker": symbol, "limit": 1}, timeout=30)
+            if r.status_code == 200:
+                results = r.json().get("results") or []
+                if results:
+                    name = results[0].get("name")
+        except Exception:
+            pass
+        self._name_cache[symbol] = name
+        return name
 
     def _fetch_grouped(self, day: date) -> dict[str, dict] | None:
         r = httpx.get(
@@ -115,14 +101,14 @@ class MassiveMarketData(MarketDataProvider):
         (latest_date, latest_bars), (prev_date, prev_bars) = days[0], days[1]
         self._dates_used = (latest_date, prev_date)
 
-        # Filter to the price band first so the name lookup only needs to resolve the
-        # (much smaller) set of tickers we're actually going to show.
+        # Company names are resolved lazily per-symbol (see company_name()) to stay within the
+        # free tier's 5 calls/minute — fetching names for the whole market here would starve
+        # the price-data calls. So whole-market quotes carry no name; Stock Detail fills it in.
         in_band = {}
         for ticker, bar in latest_bars.items():
             price = bar.get("c")
             if price is not None and self.price_min <= price <= self.price_max:
                 in_band[ticker] = bar
-        names = self._load_name_index(set(in_band.keys()))
 
         out = []
         for ticker, bar in in_band.items():
@@ -130,7 +116,6 @@ class MassiveMarketData(MarketDataProvider):
             raw_volume = bar.get("v")
             out.append(Quote(
                 symbol=ticker,
-                company_name=names.get(ticker),
                 price=bar["c"],
                 prev_close=prev_bar.get("c") if prev_bar else None,
                 day_open=bar.get("o"),

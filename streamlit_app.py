@@ -385,6 +385,9 @@ with tab_detail:
     chosen_label = st.selectbox("Search by ticker or company name", sorted(labels_to_symbol))
     symbol = labels_to_symbol[chosen_label]
     q = next(x for x in quotes if x.symbol == symbol)
+    # Massive carries no name on whole-market quotes (rate limits); resolve it lazily here.
+    if not q.company_name and hasattr(provider, "company_name"):
+        q.company_name = provider.company_name(symbol)
     if q.company_name:
         st.markdown(f"**{html.escape(q.company_name)}**")
 
