@@ -41,6 +41,7 @@ class MassiveMarketData(MarketDataProvider):
         self._dates_used: tuple[str, str] | None = None
         self._name_cache: dict[str, str | None] = {}
         self.diagnostics: list[str] = []   # per grouped-daily attempt, for UI troubleshooting
+        self._last_was_429 = False
 
     def company_name(self, symbol: str) -> str | None:
         """Resolve one ticker's company name on demand (1 call). Used lazily for the selected
@@ -62,6 +63,7 @@ class MassiveMarketData(MarketDataProvider):
         return name
 
     def _fetch_grouped(self, day: date) -> dict[str, dict] | None:
+        self._last_was_429 = False
         try:
             r = httpx.get(
                 f"{BASE_URL}/v2/aggs/grouped/locale/us/market/stocks/{day.isoformat()}",
@@ -71,34 +73,49 @@ class MassiveMarketData(MarketDataProvider):
         except Exception as e:
             self.diagnostics.append(f"{day}: request error {type(e).__name__}")
             return None
+        if r.status_code == 429:
+            self._last_was_429 = True
+            self.diagnostics.append(f"{day}: HTTP 429 rate-limited")
+            return None
         if r.status_code != 200:
-            self.diagnostics.append(f"{day}: HTTP {r.status_code} — {r.text[:160]}")
+            self.diagnostics.append(f"{day}: HTTP {r.status_code} — {r.text[:120]}")
             return None
         data = r.json()
         n = len(data.get("results") or [])
-        self.diagnostics.append(f"{day}: HTTP 200, status={data.get('status')}, results={n}")
+        self.diagnostics.append(f"{day}: HTTP 200, results={n}")
         if not n:
             return None
         return {row["T"]: row for row in data["results"] if "T" in row}
 
     def _two_most_recent_trading_days(self) -> list[tuple[str, dict[str, dict]]]:
-        """Walk backward from yesterday until two days with real data are found.
+        """Find the two most recent trading days with data, respecting the free tier's
+        5 calls/minute limit.
 
-        Respects the free tier's 5 calls/minute limit with a short pause between calls.
+        - Skips weekends (no wasted calls on days that never have data).
+        - On a 429, waits a full rate window (60s) and retries the SAME day.
+        - Small pace between normal calls.
         """
         found: list[tuple[str, dict[str, dict]]] = []
         day = date.today() - timedelta(days=1)
-        attempts = 0
-        # Walk back generously: the free tier may gate the most recent day(s), so we may need
-        # to reach a slightly older trading day. Paced to stay under 5 calls/minute.
-        while len(found) < 2 and attempts < 20:
+        guard = 0                       # hard cap on loop iterations
+        rate_waits = 0                  # cap the number of 60s backoffs
+        while len(found) < 2 and guard < 30:
+            guard += 1
+            if day.weekday() >= 5:      # Saturday/Sunday — skip without an API call
+                day -= timedelta(days=1)
+                continue
             bars = self._fetch_grouped(day)
             if bars:
                 found.append((day.isoformat(), bars))
-            day -= timedelta(days=1)
-            attempts += 1
-            if attempts < 20 and len(found) < 2:
-                time.sleep(1.5)
+                day -= timedelta(days=1)
+            elif self._last_was_429 and rate_waits < 3:
+                rate_waits += 1
+                time.sleep(60)          # wait out the rate window, retry the SAME day
+                continue
+            else:
+                day -= timedelta(days=1)  # holiday / no data — move on
+            if len(found) < 2:
+                time.sleep(2)
         return found
 
     def _load(self) -> None:
