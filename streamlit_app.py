@@ -22,7 +22,7 @@ import streamlit as st
 
 from mp_terminal import indicators, scanners, scoring
 from mp_terminal.config import load_settings
-from mp_terminal.models import ScoredStock
+from mp_terminal.models import Quote, ScoredStock
 from mp_terminal.providers import MockMarketData
 
 st.set_page_config(page_title="M&P Trading Terminal", page_icon="📈", layout="wide")
@@ -155,8 +155,11 @@ def build_massive_provider(price_min: float, price_max: float):
 
 
 def compute_bands(pmin: float, pmax: float):
-    """Split the selected range into readable sub-bands using canonical breakpoints."""
-    breaks = [pmin] + [b for b in (3, 5, 10, 20, 50) if pmin < b < pmax] + [pmax]
+    """Split the selected range into readable sub-bands using canonical breakpoints.
+    Capped at 6 columns so a very wide range (incl. large-caps) stays readable."""
+    candidates = (3, 5, 10, 20, 50, 100, 200, 500, 1000)
+    inner = [b for b in candidates if pmin < b < pmax][:5]
+    breaks = [pmin] + inner + [pmax]
     return [(f"&#36;{lo:g}–{hi:g}", lo, hi) for lo, hi in zip(breaks, breaks[1:])]
 
 
@@ -169,13 +172,14 @@ with st.sidebar:
                        label_visibility="collapsed")
 
     st.header("Price Range")
-    price_min, price_max = st.slider(
-        "Price range", min_value=0.0, max_value=100.0,
-        value=(float(settings.price_min), float(settings.price_max)), step=0.5,
-        label_visibility="collapsed",
-    )
-    st.caption(f"Scanning **\\${price_min:g} – \\${price_max:g}**  ·  "
-               f"priority \\${settings.priority_min:g}–{settings.priority_max:g}")
+    pc1, pc2 = st.columns(2)
+    price_min = pc1.number_input("Min $", min_value=0.0, value=float(settings.price_min), step=1.0)
+    price_max = pc2.number_input("Max $", min_value=0.5, value=float(settings.price_max), step=1.0)
+    if price_max <= price_min:
+        price_max = price_min + 1.0
+    st.caption(f"Scanning **\\${price_min:g} – \\${price_max:g}**. Raise **Max \\$** to include "
+               "large-caps (e.g. 300 for Apple/Tesla). Any single stock is also lookup-able in "
+               "**Stock Detail** regardless of this range.")
     if st.button("🔄 Refresh data", width="stretch"):
         st.cache_resource.clear()
         st.cache_data.clear()
@@ -240,6 +244,32 @@ def cached_daily_bars(_provider, source_key: str, symbol: str) -> list[dict]:
         return _provider.daily_bars(symbol)
     except Exception:
         return []
+
+
+def lookup_quote(symbol: str) -> Quote | None:
+    """Fetch a single ticker on demand, independent of the scan price range — so any stock
+    (e.g. AAPL, TSLA) is viewable in Stock Detail even if it's outside the scanned band.
+
+    Tries the provider's direct snapshot first (works for Finnhub/Schwab/Mock and for any
+    Massive ticker already in the band); falls back to building a Quote from historical bars
+    (works for any Massive ticker, in-band or not).
+    """
+    try:
+        q = provider.snapshot(symbol)
+        if q is not None:
+            return q
+    except Exception:
+        pass
+    if hasattr(provider, "daily_bars"):
+        bars = cached_daily_bars(provider, choice, symbol)
+        if len(bars) >= 2:
+            last, prev = bars[-1], bars[-2]
+            name = provider.company_name(symbol) if hasattr(provider, "company_name") else None
+            vol = last.get("v")
+            return Quote(symbol=symbol, company_name=name, price=last["c"], prev_close=prev["c"],
+                         day_open=last.get("o"), day_low=last.get("l"), day_high=last.get("h"),
+                         volume=int(round(vol)) if vol is not None else None)
+    return None
 
 
 def load_quotes():
@@ -414,24 +444,39 @@ def ema_line(closes: list[float], period: int):
 
 with tab_detail:
     st.subheader("Stock Detail")
-    labels_to_symbol = {
-        (f"{q.symbol} — {q.company_name}" if q.company_name else q.symbol): q.symbol
-        for q in quotes
-    }
-    ordered_labels = sorted(labels_to_symbol)
-    # Default to the top-ranked recommendation rather than the first-alphabetical symbol
-    # (which is often a thin, newly-listed ticker with no indicator history).
-    default_label = next((lbl for lbl in ordered_labels
-                          if labels_to_symbol[lbl] == top_symbol), ordered_labels[0])
-    # Whether names are searchable depends on the source: Massive whole-market carries names
-    # lazily (rate limits), so its search matches tickers only.
-    names_searchable = any(q.company_name for q in quotes[:50])
-    search_label = ("Search by ticker or company name" if names_searchable
-                    else "Search by ticker (company names load when you open a stock)")
-    chosen_label = st.selectbox(search_label, ordered_labels,
-                                index=ordered_labels.index(default_label))
-    symbol = labels_to_symbol[chosen_label]
-    q = next(x for x in quotes if x.symbol == symbol)
+
+    # Primary: type ANY ticker (works outside the scan price range — AAPL, TSLA, etc.).
+    lookup = st.text_input("🔎 Look up any ticker (works beyond the scan range)",
+                           placeholder="e.g. AAPL, TSLA, NVDA").strip().upper()
+
+    q = None
+    if lookup:
+        symbol = lookup
+        with st.spinner(f"Fetching {symbol}…"):
+            q = lookup_quote(symbol)
+        if q is None:
+            st.error(f"No data found for **{symbol}**. Check the ticker — the current source may "
+                     "not cover it, and private companies (e.g. SpaceX) aren't publicly traded.")
+    else:
+        # Secondary: browse/pick from the scanned universe.
+        labels_to_symbol = {
+            (f"{x.symbol} — {x.company_name}" if x.company_name else x.symbol): x.symbol
+            for x in quotes
+        }
+        ordered_labels = sorted(labels_to_symbol)
+        default_label = next((lbl for lbl in ordered_labels
+                              if labels_to_symbol[lbl] == top_symbol), ordered_labels[0])
+        names_searchable = any(x.company_name for x in quotes[:50])
+        pick_label = ("…or pick from the scanned list (ticker or name)" if names_searchable
+                      else "…or pick from the scanned list (by ticker)")
+        chosen_label = st.selectbox(pick_label, ordered_labels,
+                                    index=ordered_labels.index(default_label))
+        symbol = labels_to_symbol[chosen_label]
+        q = next(x for x in quotes if x.symbol == symbol)
+
+    if q is None:
+        st.stop()
+
     # Massive carries no name on whole-market quotes (rate limits); resolve it lazily here.
     if not q.company_name and hasattr(provider, "company_name"):
         q.company_name = provider.company_name(symbol)
