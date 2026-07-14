@@ -5,12 +5,11 @@ immediately, and there is no brokerage relationship, no KYC, and no personal acc
 involved. This is why it's the default, versus Schwab (optional, Paul's account, see
 schwab.py) which requires his own OAuth login for real-time data.
 
-Free tier: real-time trade data, 60 API calls/minute. To stay well under that limit across
-a ~20-symbol universe, this adapter makes 1-2 calls per symbol per refresh:
-  GET /quote          -> current price, day open/high/low, previous close  (1 call/symbol)
-  GET /stock/candle   -> today's volume-so-far, via a 'D' resolution bar    (1 call/symbol)
-  GET /stock/metric   -> 10-day avg volume + shares outstanding, MEMOIZED per instance since
-                         these change slowly (not re-fetched every refresh)
+Free tier: real-time quotes, 60 API calls/minute. Price/change/high/low come from /quote,
+which is available on the free tier. Volume (via /stock/candle) and fundamentals (via
+/stock/metric) are BEST-EFFORT enrichment — Finnhub gates some of these behind paid plans,
+and a 403 there must not take down the quote itself. Any enrichment call that fails is
+swallowed and the corresponding field is left None rather than dropping the whole symbol.
 
 The Streamlit app additionally wraps all_quotes() in st.cache_data(ttl=...) so repeated
 reruns (e.g. clicking a different tab) don't burn extra API calls within the refresh window.
@@ -51,23 +50,34 @@ class FinnhubMarketData(MarketDataProvider):
             raise FinnhubError(f"Finnhub request failed ({r.status_code}): {r.text}")
         return r.json()
 
+    def _get_safe(self, path: str, **params) -> dict | None:
+        """Like _get, but swallows failures — for optional enrichment data only.
+
+        Finnhub's free tier doesn't include every endpoint (e.g. stock candles can be
+        plan-gated); a failure here must never take down the underlying quote.
+        """
+        try:
+            return self._get(path, **params)
+        except Exception:
+            return None
+
     def _today_volume(self, symbol: str) -> int | None:
-        data = self._get(
+        data = self._get_safe(
             "/stock/candle", symbol=symbol, resolution="D",
             **{"from": _today_start_epoch(), "to": int(time.time())},
         )
-        if data.get("s") != "ok" or not data.get("v"):
+        if not data or data.get("s") != "ok" or not data.get("v"):
             return None
         return int(data["v"][-1])
 
     def _financials(self, symbol: str) -> dict:
         if symbol not in self._financials_cache:
-            data = self._get("/stock/metric", symbol=symbol, metric="all")
-            self._financials_cache[symbol] = data.get("metric", {}) or {}
+            data = self._get_safe("/stock/metric", symbol=symbol, metric="all")
+            self._financials_cache[symbol] = (data or {}).get("metric", {}) or {}
         return self._financials_cache[symbol]
 
     def snapshot(self, symbol: str) -> Quote:
-        q = self._get("/quote", symbol=symbol)
+        q = self._get("/quote", symbol=symbol)  # required — let failures propagate
         return self._build_quote(symbol, q)
 
     def all_quotes(self) -> list[Quote]:
